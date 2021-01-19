@@ -109,16 +109,26 @@ bool Init(HWND& hwnd)
 // Function to deinitialize and clean up Direct3D
 void DeInit()
 {
-  swapchain->Release();
-  swapchain = NULL;
-  rtv->Release();
-  rtv = NULL;
-  device->Release();
-  device = NULL;
-  context->Release();
-  context = NULL;
-  factory->Release();
-  factory = NULL;
+  if(swapchain) {
+    swapchain->Release();
+    swapchain = NULL;
+  }
+  if (rtv) {
+    rtv->Release();
+    rtv = NULL;
+  }
+  if (device) {
+    device->Release();
+    device = NULL;
+  }
+  if (context) {
+    context->Release();
+    context = NULL;
+  }
+  if (factory) {
+    factory->Release();
+    factory = NULL;
+  }
 
   return;
 }
