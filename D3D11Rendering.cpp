@@ -13,17 +13,24 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 #include <dxgi.h>
+#include <vector>
+#include <string>
 
 // include the Direct3D Library file
 #pragma comment (lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
+
+#define NUM_RGB_INPUT_FILES 2
+#define WIDTH 1920
+#define HEIGHT 1080
 
 // Initialization of Variables
 ID3D11Device* device = nullptr;
 ID3D11DeviceContext* context = nullptr;
 IDXGISwapChain1* swapchain = nullptr;
 IDXGIFactory2* factory = nullptr;
-ID3D11RenderTargetView* rtv = nullptr;
+std::vector<ID3D11Texture2D*> surfaces(NUM_RGB_INPUT_FILES, nullptr);
+int readIdx = 0;
 
 // Callback function for WindowProc
 LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -60,9 +67,8 @@ bool Init(HWND& hwnd)
   DXGI_SWAP_CHAIN_DESC1 desc;
   ZeroMemory(&desc, sizeof(DXGI_SWAP_CHAIN_DESC1));
   desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-  // Setting width and height to zero so that width & height from the output window
-  desc.Height = 0;
-  desc.Width = 0;
+  desc.Height = HEIGHT;
+  desc.Width = WIDTH;
   desc.Scaling = DXGI_SCALING_STRETCH;
   desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
   desc.SampleDesc.Count = 1;    // multisampling setting
@@ -82,26 +88,53 @@ bool Init(HWND& hwnd)
     return false;
   }
 
-  // Getting the address of BackBuffer
-  ID3D11Texture2D* backbuffer;
-  hr = swapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)&backbuffer);
-  if (FAILED(hr)) {
-    std::cout << "Failed to get the backbuffer with error hr:" << hr;
-    return false;
+  // Create staging textures for copying the data from a file
+  // texture descriptor that specifics the properties for that texture
+  D3D11_TEXTURE2D_DESC tdesc = { 0 };
+  tdesc.Width = WIDTH;
+  tdesc.Height = HEIGHT;
+  tdesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  tdesc.MipLevels = 1;
+  tdesc.ArraySize = 1;
+  tdesc.SampleDesc.Count = 1;
+  tdesc.SampleDesc.Quality = 0;
+  tdesc.Usage = D3D11_USAGE_STAGING;
+  tdesc.BindFlags = 0;
+  tdesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE;
+
+  for (int i = 0; i < NUM_RGB_INPUT_FILES; i++) {
+    std::string filename = "File" + std::to_string(i+1) + ".rgba";
+    FILE* fp = NULL;
+    fopen_s(&fp, filename.c_str(), "rb");
+    if (fp == NULL) {
+      std::cout << "Failed to open File1.rgba";
+      return false;
+    }
+
+    hr = device->CreateTexture2D(&tdesc, NULL, &surfaces[i]);
+    if (FAILED(hr)) {
+      std::cout << "Failed while creating staging texture hr:" << hr;
+      return false;
+    }
+
+    D3D11_MAPPED_SUBRESOURCE sr;
+    hr = context->Map(surfaces[i], 0, D3D11_MAP_WRITE, 0, &sr);
+    if (FAILED(hr)) {
+      std::cout << "Failed to Map the stagting texture hr: " << hr;
+      return false;
+    }
+
+    // Copy the file data to the buffer
+    int numbytes = fread(sr.pData, sizeof(char), tdesc.Width * tdesc.Height * 4, fp);
+
+    context->Unmap(surfaces[i], 0);
+
+    fclose(fp);
   }
 
-  // Creates a render - target view for accessing resource data.
-  // use the back buffer address to create the render target
-  hr = device->CreateRenderTargetView(backbuffer, NULL, &rtv);
-  if (FAILED(hr)) {
-    std::cout << "Failed to create rendertargetview with error hr:" << hr;
-    return false;
-  }
-
-  backbuffer->Release();
-
-  // set the render target as the back buffer
-  context->OMSetRenderTargets(1, &rtv, NULL);
+  // Initialize the read Index to 0. This is used for accessign the file to copy into
+  // back buffer. Once the index reach the NUM_RGB_INPUT_FILES, it will wrap back to 0
+  readIdx = 0;
 
   return true;
 }
@@ -113,10 +146,12 @@ void DeInit()
     swapchain->Release();
     swapchain = NULL;
   }
-  if (rtv) {
-    rtv->Release();
-    rtv = NULL;
+
+  for (ID3D11Texture2D* & tex : surfaces) {
+      tex->Release();
+      tex = nullptr;
   }
+
   if (device) {
     device->Release();
     device = NULL;
@@ -136,13 +171,22 @@ void DeInit()
 // Function to Render a frame to window
 void Render()
 {
-  FLOAT color[4] = { 1.0f, 0.0f, 0.0f, 1.0f };
+  // Getting the address of BackBuffer
+  ID3D11Texture2D* backbuffer;
+  HRESULT hr = swapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)&backbuffer);
+  if (FAILED(hr)) {
+    std::cout << "Failed to get the backbuffer with error hr:" << hr;
+    return;
+  }
 
-  // clear the back buffer to a red color
-  context->ClearRenderTargetView(rtv, color);
+  readIdx = readIdx % NUM_RGB_INPUT_FILES;
 
+  context->CopyResource(backbuffer, surfaces[readIdx++]);
   // switch the back buffer and the front buffer
-  swapchain->Present(0, 0);
+  hr = swapchain->Present(0, 0);
+  if (FAILED(hr)) {
+      std::cout << "Swapchain of present failed with error hr:" << hr;
+  }
 }
 
 // this is the main message handler for the program
@@ -180,7 +224,7 @@ int main(void)
     std::cout << "Could not register class";
     return false;
   }
-  RECT wr = { 0, 0, 800, 600 };
+  RECT wr = { 0, 0, WIDTH, HEIGHT};
   AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
 
   // Create a Window
@@ -202,7 +246,7 @@ int main(void)
   }
   ShowWindow(hWnd, SW_RESTORE);
 
-  // Initialize Direct3D objects
+  // Initialize Direct3D11 & Swapchain objects
   if (!Init(hWnd)) {
     DeInit();
     return false;
